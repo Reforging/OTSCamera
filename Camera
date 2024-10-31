@@ -1,0 +1,229 @@
+local module = {}
+local meta = {__index = module}
+
+local inputservice = game:GetService("UserInputService")
+local runservice = game:GetService("RunService")
+local tweenservice = game:GetService("TweenService")
+
+local camPosition = script:WaitForChild("CameraPos")
+
+local occlusionModule = script:WaitForChild("Occlusion")
+local spring = require(script.Spring)
+
+local recoilSpring = spring.new()
+
+local RecoilOffsetX, RecoilOffsetY = 0, 0
+local lastRecoil = os.clock()
+
+local currentCameraCFrame
+local currentCameraFocus
+
+local function lerp(a, b, c) --current, goal, time
+	return a + (b - a) * c
+end
+
+local function setPlayerVisibility(player)
+	if player.Character == nil then return end
+	for i, v in pairs(player.Character:GetDescendants()) do
+		if v:IsA("BasePart") then
+			v.LocalTransparencyModifier = 0
+		end
+	end
+end
+
+local function getCharacters()
+	local list = {}
+
+	for _, player in pairs(game.Players:GetPlayers()) do
+		if player.Character == nil then continue end
+		table.insert(list, player.Character)
+	end
+
+	return list
+end
+
+local function checkIfListed(list, object)
+	local ok = false
+
+	for i, v in pairs(list) do
+		if object:IsDescendantOf(v) or v == object then
+			ok = true
+		end
+	end
+
+	return ok
+end
+
+local function getIgnoreList(player)
+	if player == nil then return end
+
+	local ignore = {player.Character}
+
+	local characters = getCharacters()
+	for i, v in pairs(characters) do
+		if v == player.Character then continue end
+		table.insert(ignore, v)
+	end
+
+	for i, v in pairs(workspace:GetDescendants()) do
+		if v:IsA("BasePart") == false then continue end
+		if checkIfListed(ignore, v) == true then continue end
+		if v.CanCollide == true then continue end
+
+		table.insert(ignore, v)
+	end
+
+	return ignore
+end
+
+local function init(self)
+
+	local mouse = self.Player:GetMouse()
+	
+	local thumbstickMoving = false
+
+	if self.Connections["InputService"] == nil then
+		self.Connections["InputService"] = {}
+	end
+	if self.Connections[self.Player] == nil then
+		self.Connections[self.Player] = {}
+	end
+
+	if self.Connections["InputService"]["InputChanged"] ~= nil then
+		self.Connections["InputService"]["InputChanged"]:Disconnect()
+		self.Connections["InputService"]["InputChanged"] = nil
+	end
+
+	self.Connections["InputService"]["InputChanged"] = inputservice.InputChanged:Connect(function(input, process)
+		if process then return end
+		
+		if input.UserInputType == Enum.UserInputType.MouseMovement then
+			self.cameraXAngle = self.cameraXAngle - input.Delta.x * 0.16
+			self.cameraYAngle = math.clamp(self.cameraYAngle - input.Delta.y * .16, -80, 80)
+		end
+		
+		if input.KeyCode == Enum.KeyCode.Thumbstick2 then
+			
+			if thumbstickMoving == true then return end
+			
+			task.spawn(function()
+				thumbstickMoving = true
+				
+				repeat
+					self.cameraXAngle = self.cameraXAngle - input.Position.x * 3
+					self.cameraYAngle = math.clamp(self.cameraYAngle + input.Position.y * 2, -80, 80)
+					task.wait()
+				until input.KeyCode ~= Enum.KeyCode.Thumbstick2 or input.Position.Magnitude <= 0.15
+				
+				thumbstickMoving = false
+			end)
+		end
+
+		if input.UserInputType == Enum.UserInputType.MouseWheel then
+			local newPos = input.Position.z * 2
+			self.camDistance = self.camDistance - newPos
+			self.camDistance = math.clamp(self.camDistance, 7, 20)
+		end
+	end)
+
+	self.Connections[self.Player]["OTSCamera"] = runservice.RenderStepped:Connect(function(dt)
+
+		if self.CameraEnabled == true then
+			inputservice.MouseBehavior = Enum.MouseBehavior.LockCenter
+			workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable
+		end
+
+		if camPosition ~= nil and self.camDistance ~= nil then
+			camPosition.Value = lerp(camPosition.Value, Vector3.new(camPosition.Value.X, camPosition.Value.Y, self.camDistance), 0.4)
+		end
+
+		if self.Player.Character == nil then return end
+		if self.Player.Character:FindFirstChild("HumanoidRootPart") == nil then return end
+
+		local rootPart = self.Player.Character.HumanoidRootPart
+		local startCFrame = CFrame.new((rootPart.CFrame.p + Vector3.new(0, 2, 0))) * CFrame.Angles(0, math.rad(self.cameraXAngle), 0) * CFrame.Angles(math.rad(self.cameraYAngle), 0, 0)
+		local cameraCFrame = startCFrame + startCFrame:VectorToWorldSpace(Vector3.new(camPosition.Value.X, camPosition.Value.Y, camPosition.Value.Z))
+		local cameraFocus = startCFrame + startCFrame:VectorToWorldSpace(Vector3.new(camPosition.Value.X, camPosition.Value.Y, -50000))
+
+		if self.CameraEnabled == false then return end
+
+		workspace.CurrentCamera.CFrame = CFrame.new(cameraCFrame.p, cameraFocus.p)
+
+		local character = self.Player.Character
+		if character then
+			if character:FindFirstChild("Head") == nil then return end
+			local camera = workspace.CurrentCamera
+
+			local pos = self.CollisionPoint(self.Player)
+			if pos == nil then return end
+
+			camera.CFrame = (camera.CFrame - (camera.CFrame.Position - pos)) + (character.Head.Position - camera.CFrame.Position).Unit
+
+			if os.clock() - lastRecoil > 0.1 then
+				recoilSpring:changestats(nil, nil, 10)
+				recoilSpring:shove(Vector3.new(RecoilOffsetX, RecoilOffsetY, 0))
+				RecoilOffsetX, RecoilOffsetY = 0, 0
+			end
+
+			local recoil = recoilSpring:update(dt)
+			camera.CFrame = camera.CFrame * CFrame.Angles(math.rad(recoil.Y), math.rad(recoil.X), 0)
+		end
+
+	end)
+end
+
+function module.new(player)
+	local self = {}
+	self.Connections = {}
+
+	self.Player = player
+
+	self.CameraEnabled = false
+
+	self.camDistance = math.clamp(workspace.CurrentCamera.CFrame.Z, 7, 20)
+	self.cameraYAngle = 0
+	self.cameraXAngle = 0
+
+	self.CollisionPoint = require(occlusionModule)
+
+	init(self)
+	return setmetatable(self, meta)
+end
+
+function module:EnableCamera(enabled: boolean)
+	if enabled == true then
+		currentCameraCFrame = workspace.CurrentCamera.CFrame
+		currentCameraFocus = workspace.CurrentCamera.Focus
+
+		self.CameraEnabled = true
+		setPlayerVisibility(self.Player)
+
+		self.cameraXAngle = math.deg(math.atan2(-currentCameraCFrame.LookVector.X, -currentCameraCFrame.LookVector.Z))
+		self.cameraYAngle = math.deg(math.asin(currentCameraCFrame.LookVector.Y))
+		--self.camDistance = (currentCameraCFrame.Position - self.Player.Character.HumanoidRootPart.Position).Magnitude
+
+	else
+		if self.Connections[self.Player]["OTSCamera"] == nil then return end
+		self.CameraEnabled = false
+
+		if self.Player == nil then return end
+		if self.Player.Character == nil then return end
+		if self.Player.Character:FindFirstChild("Humanoid") == nil then return end
+		workspace.CurrentCamera.CameraSubject = self.Player.Character.Humanoid
+		workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+		inputservice.MouseBehavior = Enum.MouseBehavior.Default
+	end
+end
+
+function module:SetCameraPosition(position: Vector3, t: number?)
+	local info = TweenInfo.new(t)
+
+	local goal = {
+		Value = Vector3.new(position.X, position.Y, self.camDistance)
+	}
+
+	local tween = tweenservice:Create(camPosition, info, goal)
+	tween:Play()
+end
+
+return module
