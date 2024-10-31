@@ -1,0 +1,82 @@
+local characterList = {}
+
+local queryLimit = 64
+
+for _,player in pairs(game.Players:GetPlayers()) do
+	if player.Character ~= nil then
+		table.insert(characterList, player.Character)
+	end
+	
+	player.CharacterAdded:Connect(function(character)
+		while character == nil or character.Parent == nil do
+			character = player.Character
+			task.wait()
+		end
+
+		table.insert(characterList, character)
+	end)
+end
+
+game.Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function(character)
+		while character == nil or character.Parent == nil do
+			character = player.Character
+			task.wait()
+		end
+		
+		table.insert(characterList, character)
+	end)
+end)
+
+
+
+
+local function getTransparency(part)
+	return 1 - (1 - part.Transparency)*(1 - part.LocalTransparencyModifier)
+end
+
+local function canOcclude(part)
+	if part == nil then return end
+	
+	local ok = false
+	
+	
+	if getTransparency(part) >= 0.7 or part.CanCollide == false then
+		ok = true
+	end
+	
+	return ok
+end
+
+local function collisionPoint(player)
+	if player.Character == nil then return end
+	if player.Character:FindFirstChild("Head") == nil then return end
+	
+	
+	local queryCount = 0
+	local collisionPoint = nil
+	
+	local ignore = {player.Character, unpack(characterList)}
+	
+	repeat
+		local camera = workspace.CurrentCamera
+
+		local ray = Ray.new(player.Character.Head.Position, camera.CFrame.Position - player.Character.Head.Position)
+		
+		local hit,pos = workspace:FindPartOnRayWithIgnoreList(ray, ignore)
+		
+		
+		if canOcclude(hit) == true then
+			table.insert(ignore, hit)
+		else
+			collisionPoint = pos
+		end
+		
+		queryCount += 1
+	until queryCount >= queryLimit or collisionPoint ~= nil
+	
+	
+	return collisionPoint
+end
+
+return collisionPoint
